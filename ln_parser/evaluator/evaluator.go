@@ -7,6 +7,10 @@ import (
 	"github.com/procode2/lena/ln_parser/object"
 )
 
+type JavaScriptCode struct {
+	Code string
+}
+
 var (
 	TRUE  = &object.Boolean{Value: true}
 	FALSE = &object.Boolean{Value: false}
@@ -112,321 +116,144 @@ func evalStringInfixExpression(operator string, left, right object.Object) objec
 
 	return &object.String{Value: leftVal + rightVal}
 }
-
-func evalProgram(program *ast.Program, env *object.Environment) object.Object {
-	var result object.Object
-
-	for _, stmt := range program.Statements {
-		result = Eval(stmt, env)
-
-		// if returnValue, ok := result.(*object.ReturnValue); ok {
-		// 	return returnValue.Value
-		// }
-		switch result := result.(type) {
-		case *object.ReturnValue:
-			return result.Value
-		case *object.Error:
-			return result
-		}
-	}
-
-	return result
-}
-
-func evalBlockStatement(block *ast.BlockStatement, env *object.Environment) object.Object {
-	var result object.Object
-
-	for _, stmt := range block.Statements {
-		result = Eval(stmt, env)
-
-		// if result != nil && result.Type() == object.RETURN_VALUE_OBJ {
-		// 	return result
-		// }
-		if result != nil {
-			rt := result.Type()
-			if rt == object.RETURN_VALUE_OBJ || rt == object.ERROR_OBJ {
-				return result
+func Eval(node ast.Node) JavaScriptCode {
+	//fmt.Println("node")
+	//fmt.Println(node)
+	switch node := node.(type) {
+	case *ast.Program:
+		return evalProgram(node)
+	case *ast.ExpressionStatement:
+		// Check for "puts" and replace with "console.log"
+		if callExp, ok := node.Expression.(*ast.CallExpression); ok {
+			if ident, ok := callExp.Function.(*ast.Identifier); ok {
+				if ident.Value == "puts" {
+					// Replace "puts" with "console.log"
+					callExp.Function = &ast.Identifier{Value: "console.log"}
+				}
 			}
 		}
-	}
-
-	return result
-}
-
-func evalIdentifier(node *ast.Identifier, env *object.Environment) object.Object {
-	if val, ok := env.Get(node.Value); ok {
-		return val
-	}
-	// if !ok {
-	// 	return newError("identifier not found: " + identifier.Value)
-	// }
-
-	// return val
-
-	if builtin, ok := builtins[node.Value]; ok {
-		return builtin
-	}
-
-	return newError("identifier not found: " + node.Value)
-}
-
-func Eval(node ast.Node, env *object.Environment) object.Object {
-	switch node := node.(type) {
-
-	case *ast.Program:
-		// return evalStatements(node.Statements)
-		return evalProgram(node, env)
-
-	case *ast.ExpressionStatement:
-		return Eval(node.Expression, env)
-
-	case *ast.IntegerLiteral:
-		return &object.Integer{Value: node.Value}
-
-	case *ast.Boolean:
-		// return &object.Boolean{Value: node.Value}
-		return nativeBoolToBooleanObject(node.Value)
-
-	case *ast.PrefixExpression:
-		right := Eval(node.Right, env)
-		if isError(right) {
-			return right
-		}
-		return evalPrefixExpression(node.Operator, right)
-
+		return Eval(node.Expression)
 	case *ast.InfixExpression:
-		left := Eval(node.Left, env)
-		if isError(left) {
-			return left
+		left := Eval(node.Left)
+		right := Eval(node.Right)
+		operator := node.Operator
+		return JavaScriptCode{Code: fmt.Sprintf("(%s %s %s)", left.Code, operator, right.Code)}
+	case *ast.IntegerLiteral:
+		return JavaScriptCode{Code: fmt.Sprintf("%d", node.Value)}
+	case *ast.Boolean:
+		if node.Value {
+			return JavaScriptCode{Code: "true"}
 		}
-
-		right := Eval(node.Right, env)
-		if isError(right) {
-			return right
-		}
-		return evalInfixExpression(node.Operator, left, right)
-
+		return JavaScriptCode{Code: "false"}
+	case *ast.PrefixExpression:
+		right := Eval(node.Right)
+		operator := node.Operator
+		return JavaScriptCode{Code: fmt.Sprintf("(%s%s)", operator, right.Code)}
 	case *ast.BlockStatement:
-		// return evalStatements(node.Statements)
-		return evalBlockStatement(node, env)
-
+		return evalBlockStatement(node)
 	case *ast.IfExpression:
-		return evalIfExpression(node, env)
-
+		return evalIfExpression(node)
 	case *ast.ReturnStatement:
-		val := Eval(node.ReturnValue, env)
-		if isError(val) {
-			return val
-		}
-
-		return &object.ReturnValue{Value: val}
-
+		return JavaScriptCode{Code: fmt.Sprintf("return %s;", Eval(node.ReturnValue).Code)}
 	case *ast.LetStatement:
-		val := Eval(node.Value, env)
-		if isError(val) {
-			return val
-		}
-		// How to keep track of bindings/identifiers...
-		env.Set(node.Name.Value, val)
-
+		return JavaScriptCode{Code: fmt.Sprintf("let %s = %s;", node.Name.Value, Eval(node.Value).Code)}
 	case *ast.Identifier:
-		return evalIdentifier(node, env)
-
+		return JavaScriptCode{Code: node.Value}
 	case *ast.FunctionLiteral:
-		params := node.Parameters
-		body := node.Body
-		return &object.Function{Parameters: params, Env: env, Body: body}
-
-	case *ast.StringLiteral:
-		return &object.String{Value: node.Value}
-
+		parameters := parametersToString(node.Parameters)
+		body := Eval(node.Body)
+		return JavaScriptCode{Code: fmt.Sprintf("function(%s) {\n%s\n}", parameters, body.Code)}
 	case *ast.CallExpression:
-		function := Eval(node.Function, env)
-		if isError(function) {
-			return function
-		}
-
-		args := evalExpressions(node.Arguments, env)
-		if len(args) == 1 && isError(args[0]) {
-			return args[0]
-		}
-
-		return applyFunction(function, args)
-
+		function := Eval(node.Function)
+		arguments := argumentsToString(node.Arguments)
+		return JavaScriptCode{Code: fmt.Sprintf("%s(%s)", function.Code, arguments)}
 	case *ast.ArrayLiteral:
-		elements := evalExpressions(node.Elements, env)
-		if len(elements) == 1 && isError(elements[0]) {
-			return elements[0]
-		}
-		return &object.Array{Elements: elements}
-
+		elements := elementsToString(node.Elements)
+		return JavaScriptCode{Code: fmt.Sprintf("[%s]", elements)}
 	case *ast.IndexExpression:
-		left := Eval(node.Left, env)
-		if isError(left) {
-			return left
-		}
-		index := Eval(node.Index, env)
-		if isError(index) {
-			return index
-		}
-		return evalIndexExpression(left, index)
-
+		left := Eval(node.Left)
+		index := Eval(node.Index)
+		return JavaScriptCode{Code: fmt.Sprintf("%s[%s]", left.Code, index.Code)}
 	case *ast.HashLiteral:
-		return evalHashLiteral(node, env)
+		pairs := hashPairsToString(node.Pairs)
+		return JavaScriptCode{Code: fmt.Sprintf("{%s}", pairs)}
+	case *ast.StringLiteral:
+		return JavaScriptCode{Code: fmt.Sprintf(`"%s"`, node.Value)}
 	}
 
-	return nil
+	return JavaScriptCode{}
 }
 
-func evalHashLiteral(
-	node *ast.HashLiteral,
-	env *object.Environment,
-) object.Object {
-	pairs := make(map[object.HashKey]object.HashPair)
-	for keyNode, valueNode := range node.Pairs {
-		key := Eval(keyNode, env)
-		if isError(key) {
-			return key
-		}
-		hashKey, ok := key.(object.Hashable)
-		if !ok {
-			return newError("unusable as hash key: %s", key.Type())
-		}
-		value := Eval(valueNode, env)
-		if isError(value) {
-			return value
-		}
-		hashed := hashKey.HashKey()
-		pairs[hashed] = object.HashPair{Key: key, Value: value}
+func evalProgram(program *ast.Program) JavaScriptCode {
+	var accumulatedCode string
+
+	for _, stmt := range program.Statements {
+		result := Eval(stmt)
+		accumulatedCode += result.Code + "\n"
 	}
-	return &object.Hash{Pairs: pairs}
+
+	return JavaScriptCode{Code: accumulatedCode}
 }
 
-func evalIndexExpression(left, index object.Object) object.Object {
-	switch {
-	case left.Type() == object.ARRAY_OBJ && index.Type() == object.INTEGER_OBJ:
-		return evalArrayIndexExpression(left, index)
-	case left.Type() == object.HASH_OBJ:
-		return evalHashIndexExpression(left, index)
-	default:
-		return newError("index operator not supported: %s", left.Type())
-	}
-}
+func evalBlockStatement(block *ast.BlockStatement) JavaScriptCode {
+	var result JavaScriptCode
 
-func evalHashIndexExpression(hash, index object.Object) object.Object {
-	hashObject := hash.(*object.Hash)
-	key, ok := index.(object.Hashable)
-	if !ok {
-		return newError("unusable as hash key: %s", index.Type())
-	}
-	pair, ok := hashObject.Pairs[key.HashKey()]
-	if !ok {
-		return NULL
-	}
-	return pair.Value
-}
-
-func evalArrayIndexExpression(array, index object.Object) object.Object {
-	arrayObject := array.(*object.Array)
-	idx := index.(*object.Integer).Value
-	max := int64(len(arrayObject.Elements) - 1)
-
-	if idx < 0 || idx > max {
-		return NULL
-	}
-
-	return arrayObject.Elements[idx]
-}
-
-func applyFunction(fn object.Object, args []object.Object) object.Object {
-	// function, ok := fn.(*object.Function)
-	// if !ok {
-	// 	return newError("not a function: %s", fn.Type())
-	// }
-
-	// extendedEnv := extendFunctionEnv(function, args)
-	// evaluated := Eval(function.Body, extendedEnv)
-	// return unwrapReturnValue(evaluated)
-
-	switch fn := fn.(type) {
-	case *object.Function:
-		extendedEnv := extendFunctionEnv(fn, args)
-		evaluated := Eval(fn.Body, extendedEnv)
-		return unwrapReturnValue(evaluated)
-	case *object.Builtin:
-		return fn.Fn(args...)
-	default:
-		return newError("not a function: %s", fn.Type())
-	}
-}
-
-func extendFunctionEnv(fn *object.Function, args []object.Object) *object.Environment {
-	env := object.NewEnclosedEnvironment(fn.Env)
-
-	for paramIdx, param := range fn.Parameters {
-		env.Set(param.Value, args[paramIdx])
-	}
-
-	return env
-}
-
-func unwrapReturnValue(obj object.Object) object.Object {
-	if returnValue, ok := obj.(*object.ReturnValue); ok {
-		return returnValue.Value
-	}
-
-	return obj
-}
-
-func evalExpressions(exps []ast.Expression, env *object.Environment) []object.Object {
-	var result []object.Object
-
-	for _, exp := range exps {
-		evaluated := Eval(exp, env)
-		if isError(evaluated) {
-			return []object.Object{evaluated}
-		}
-		result = append(result, evaluated)
+	for _, stmt := range block.Statements {
+		result = Eval(stmt)
 	}
 
 	return result
 }
 
-func evalIfExpression(ie *ast.IfExpression, env *object.Environment) object.Object {
-	condition := Eval(ie.Condition, env)
-	if isError(condition) {
-		return condition
+func evalIfExpression(ie *ast.IfExpression) JavaScriptCode {
+	condition := Eval(ie.Condition)
+	consequence := Eval(ie.Consequence)
+	if ie.Alternative != nil {
+		alternative := Eval(ie.Alternative)
+		return JavaScriptCode{Code: fmt.Sprintf("if (%s) {\n%s\n} else {\n%s\n}", condition.Code, consequence.Code, alternative.Code)}
 	}
 
-	if isTruthy(condition) {
-		return Eval(ie.Consequence, env)
-	} else if ie.Alternative != nil {
-		return Eval(ie.Alternative, env)
-	} else {
-		return NULL
-	}
+	return JavaScriptCode{Code: fmt.Sprintf("if (%s) {\n%s\n}", condition.Code, consequence.Code)}
 }
 
-func isTruthy(obj object.Object) bool {
-	switch obj {
-	case NULL, FALSE:
-		return false
-	default:
-		return true
-	}
-}
-
-func evalStatements(stmts []ast.Statement, env *object.Environment) object.Object {
-	var result object.Object
-
-	for _, stmt := range stmts {
-		result = Eval(stmt, env)
-
-		if returnValue, ok := result.(*object.ReturnValue); ok {
-			return returnValue.Value
+func parametersToString(parameters []*ast.Identifier) string {
+	var result string
+	for i, param := range parameters {
+		result += param.Value
+		if i < len(parameters)-1 {
+			result += ", "
 		}
 	}
+	return result
+}
 
+func argumentsToString(arguments []ast.Expression) string {
+	var result string
+	for i, arg := range arguments {
+		result += Eval(arg).Code
+		if i < len(arguments)-1 {
+			result += ", "
+		}
+	}
+	return result
+}
+
+func elementsToString(elements []ast.Expression) string {
+	var result string
+	for i, element := range elements {
+		result += Eval(element).Code
+		if i < len(elements)-1 {
+			result += ", "
+		}
+	}
+	return result
+}
+
+func hashPairsToString(pairs map[ast.Expression]ast.Expression) string {
+	var result string
+	for key, value := range pairs {
+		result += fmt.Sprintf("%s: %s", Eval(key).Code, Eval(value).Code)
+	}
 	return result
 }
 

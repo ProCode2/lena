@@ -7,7 +7,6 @@ import (
 
 	"github.com/procode2/lena/ln_parser/evaluator"
 	"github.com/procode2/lena/ln_parser/lexer"
-	"github.com/procode2/lena/ln_parser/object"
 	"github.com/procode2/lena/ln_parser/parser"
 )
 
@@ -15,7 +14,6 @@ const PROMPT = ">> "
 
 func Start(in io.Reader, out io.Writer) {
 	scanner := bufio.NewScanner(in)
-	env := object.NewEnvironment()
 
 	for {
 		fmt.Print(PROMPT)
@@ -31,19 +29,22 @@ func Start(in io.Reader, out io.Writer) {
 		program := p.ParseProgram()
 
 		if len(p.Errors()) != 0 {
-			printParserErrors(out, p.Errors())
+			PrintParserErrors(out, p.Errors())
 			continue
 		}
 
-		evaluated := evaluator.Eval(program, env)
-		if evaluated != nil {
+		evaluated := evaluator.Eval(program)
+		/*if evaluated != nil {
 			io.WriteString(out, evaluated.Inspect())
 			io.WriteString(out, "\n")
-		}
+		}*/
+
+		io.WriteString(out, evaluated.Code)
+		io.WriteString(out, "\n")
 	}
 }
 
-func printParserErrors(out io.Writer, errors []string) {
+func PrintParserErrors(out io.Writer, errors []string) {
 	for _, msg := range errors {
 		io.WriteString(out, fmt.Sprintf("\t%s\n", msg))
 	}
