@@ -2,7 +2,13 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
+
+	"github.com/procode2/lena/ln_parser/evaluator"
+	"github.com/procode2/lena/ln_parser/lexer"
+	"github.com/procode2/lena/ln_parser/parser"
+	"github.com/procode2/lena/ln_parser/repl"
 )
 
 func parseMetaSection(metaString string) {
@@ -26,9 +32,30 @@ func parseMetaSection(metaString string) {
 	fmt.Println(metaInfo)
 }
 
+func parseDataSection(dataString string) {
+
+	l := lexer.New(dataString)
+	p := parser.New(l)
+
+	program := p.ParseProgram()
+
+	if len(p.Errors()) != 0 {
+		repl.PrintParserErrors(os.Stdout, p.Errors())
+	}
+
+	evaluated := evaluator.Eval(program)
+	fmt.Println(evaluated.Code)
+}
+
 func main() {
 	input := `title: HelloBrother whe are u doing
 		description: demo
 		how: you`
+
+	input2 := `let todo = ["this is task 1", "this is task 2"];
+	puts(todo);
+	let lobby = fn(something) {puts(something);};
+	lobby(todo[1]);`
 	parseMetaSection(input)
+	parseDataSection(input2)
 }
